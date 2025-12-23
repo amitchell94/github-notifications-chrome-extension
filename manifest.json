@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Notifications",
+  "version": "1.0",
+  "description": "View your GitHub notifications at a glance",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["https://api.github.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon48.png"
+  },
+  "icons": {
+    "48": "icon48.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
+
