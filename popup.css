@@ -126,6 +126,7 @@ header {
   align-items: center;
   justify-content: center;
   gap: 12px;
+  padding: 48px;
   color: var(--text-secondary);
 }
 
