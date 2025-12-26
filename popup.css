@@ -70,6 +70,8 @@ header {
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s ease;
+  height: 30px;
+  width: 30px;
 }
 
 .icon-btn:hover {
@@ -83,9 +85,12 @@ header {
 }
 
 .icon-btn.loading {
-  animation: spin 1s linear infinite;
   pointer-events: none;
   opacity: 0.7;
+}
+
+.icon-btn.loading svg {
+  animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
@@ -121,7 +126,6 @@ header {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 48px;
   color: var(--text-secondary);
 }
 
