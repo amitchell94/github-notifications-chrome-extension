@@ -4,6 +4,12 @@ const HEADERS = {
   'X-GitHub-Api-Version': '2022-11-28'
 };
 
+// Configuration constants
+const MAX_NOTIFICATIONS = 100;
+const API_BATCH_SIZE = 5;
+const MAX_COMMENTS_PER_FETCH = 50;
+const NOTIFICATION_REMOVAL_ANIMATION_MS = 200;
+
 let currentUser = null;
 
 // DOM Elements
@@ -169,9 +175,122 @@ async function markNotificationAsDone(threadId, token) {
   return response.status === 204;
 }
 
-async function loadNotifications(token, isBackground = false, keepExisting = false) {
-  console.log('[GH Notif] === loadNotifications called ===', { isBackground, keepExisting, tokenPrefix: token?.substring(0, 10) + '...' });
+// Helper functions for notification processing
+function needsActivityCheck(notification) {
+  return (notification.reason === 'author' || notification.reason === 'comment') && 
+         notification.type === 'PullRequest';
+}
+
+async function fetchNewIssueComments(repoUrl, prNumber, sinceDate, currentUser, token) {
+  try {
+    const commentsUrl = `${repoUrl}/issues/${prNumber}/comments?per_page=${MAX_COMMENTS_PER_FETCH}`;
+    const comments = await fetchWithAuth(commentsUrl, token);
+    const newComments = sinceDate 
+      ? comments.filter(c => new Date(c.created_at) > sinceDate && c.user?.login !== currentUser)
+      : comments.filter(c => c.user?.login !== currentUser).slice(-5);
+    
+    return newComments.map(comment => ({
+      type: 'comment',
+      author: comment.user?.login,
+      createdAt: new Date(comment.created_at)
+    }));
+  } catch (err) {
+    return [];
+  }
+}
+
+async function fetchNewReviewComments(repoUrl, prNumber, sinceDate, currentUser, token) {
+  try {
+    const reviewCommentsUrl = `${repoUrl}/pulls/${prNumber}/comments?per_page=${MAX_COMMENTS_PER_FETCH}`;
+    const reviewComments = await fetchWithAuth(reviewCommentsUrl, token);
+    const newReviewComments = sinceDate
+      ? reviewComments.filter(c => new Date(c.created_at) > sinceDate && c.user?.login !== currentUser)
+      : reviewComments.filter(c => c.user?.login !== currentUser).slice(-5);
+    
+    return newReviewComments.map(comment => ({
+      type: 'review_comment',
+      author: comment.user?.login,
+      createdAt: new Date(comment.created_at)
+    }));
+  } catch (err) {
+    return [];
+  }
+}
+
+async function fetchNewReviews(repoUrl, prNumber, sinceDate, currentUser, token) {
+  try {
+    const reviewsUrl = `${repoUrl}/pulls/${prNumber}/reviews?per_page=${MAX_COMMENTS_PER_FETCH}`;
+    const reviews = await fetchWithAuth(reviewsUrl, token);
+    
+    const newReviews = sinceDate
+      ? reviews.filter(r => new Date(r.submitted_at) > sinceDate && r.user?.login !== currentUser)
+      : reviews.filter(r => r.user?.login !== currentUser).slice(-5);
+    
+    return newReviews.map(review => {
+      const state = review.state?.toLowerCase();
+      let reviewType = 'reviewed';
+      if (state === 'approved') reviewType = 'approved';
+      else if (state === 'changes_requested') reviewType = 'changes_requested';
+      else if (state === 'commented') reviewType = 'reviewed';
+      
+      return {
+        type: reviewType,
+        author: review.user?.login,
+        createdAt: new Date(review.submitted_at)
+      };
+    });
+  } catch (err) {
+    return [];
+  }
+}
+
+function buildActivitySummary(notification) {
+  if (notification.newActivities.length === 0) {
+    return;
+  }
   
+  // Get unique authors
+  const authors = [...new Set(notification.newActivities.map(a => a.author).filter(Boolean))];
+  notification.activityAuthor = authors.slice(0, 2).join(', ') + (authors.length > 2 ? ` +${authors.length - 2}` : '');
+  
+  // Build summary of activity types
+  const typeCounts = {};
+  for (const activity of notification.newActivities) {
+    typeCounts[activity.type] = (typeCounts[activity.type] || 0) + 1;
+  }
+  
+  // Prioritize showing the most important activity type
+  if (typeCounts.approved) {
+    notification.specificReason = typeCounts.approved > 1 ? `${typeCounts.approved} approvals` : 'approved';
+  } else if (typeCounts.changes_requested) {
+    notification.specificReason = 'changes_requested';
+  } else if (typeCounts.reviewed) {
+    notification.specificReason = typeCounts.reviewed > 1 ? `${typeCounts.reviewed} reviews` : 'reviewed';
+  } else {
+    // Count comments
+    const commentCount = (typeCounts.comment || 0) + (typeCounts.review_comment || 0);
+    if (commentCount > 0) {
+      notification.specificReason = commentCount > 1 ? `${commentCount} comments` : 'commented';
+    }
+  }
+}
+
+function filterNotificationByRules(notification) {
+  if (notification.isTeamReview) {
+    return false;
+  }
+  // For merged/closed PRs, only show if there's new activity
+  if (notification.isClosedOrMerged && notification.newActivities.length === 0) {
+    return false;
+  }
+  // For author/comment notifications, only show if there's new activity
+  if ((notification.reason === 'author' || notification.reason === 'comment') && notification.newActivities.length === 0) {
+    return false;
+  }
+  return true;
+}
+
+async function loadNotifications(token, isBackground = false, keepExisting = false) {
   if (!isBackground) {
     showLoading(keepExisting);
   }
@@ -181,24 +300,13 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
     if (!currentUser) {
       const user = await fetchWithAuth(`${API_BASE}/user`, token);
       currentUser = user.login;
-      console.log('[GH Notif] Current user:', currentUser);
     }
     
     // Get notifications
-    console.log('[GH Notif] Fetching notifications...');
     const notifications = await fetchWithAuth(
-      `${API_BASE}/notifications?per_page=100`,
+      `${API_BASE}/notifications?per_page=${MAX_NOTIFICATIONS}`,
       token
     );
-    
-    console.log('[GH Notif] Raw notifications from API (count=' + notifications.length + '):', notifications.map(n => ({
-      id: n.id,
-      reason: n.reason,
-      type: n.subject.type,
-      title: n.subject.title,
-      updated_at: n.updated_at,
-      last_read_at: n.last_read_at
-    })));
     
     if (notifications.length === 0) {
       await chrome.storage.local.set({ cachedNotifications: [], cachedAt: Date.now() });
@@ -216,15 +324,6 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
     // - mention (someone @mentioned you)
     // - comment (replies to threads you commented on)
     const allowedReasons = ['review_requested', 'author', 'mention', 'comment'];
-    
-    const filteredOutByReason = notifications.filter(n => !allowedReasons.includes(n.reason));
-    if (filteredOutByReason.length > 0) {
-      console.log('[GH Notif] Filtered OUT by reason:', filteredOutByReason.map(n => ({
-        reason: n.reason,
-        type: n.subject.type,
-        title: n.subject.title
-      })));
-    }
     
     // Quick parse - show notifications immediately without details
     const quickNotifications = notifications
@@ -246,19 +345,16 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
         author: null,
         activityAuthor: null, // Who triggered this notification
         newActivities: [], // Array of new activities since last_read_at
-        isDirect: true,
-        isTeamReview: false,
-        detailsLoaded: false
+        isTeamReview: false
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt); // Most recent first
     
     // Now fetch details
     const detailedNotifications = [...quickNotifications];
     
-    // Process in batches of 5 for speed
-    const batchSize = 5;
-    for (let i = 0; i < detailedNotifications.length; i += batchSize) {
-      const batch = detailedNotifications.slice(i, i + batchSize);
+    // Process in batches for speed
+    for (let i = 0; i < detailedNotifications.length; i += API_BATCH_SIZE) {
+      const batch = detailedNotifications.slice(i, i + API_BATCH_SIZE);
       
       await Promise.all(batch.map(async (notification) => {
         if (!notification.url) return;
@@ -266,7 +362,6 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
         try {
           const details = await fetchWithAuth(notification.url, token);
           notification.author = details.user?.login;
-          notification.detailsLoaded = true;
           
           // Check if it's a team review request
           if (notification.reason === 'review_requested' && notification.type === 'PullRequest') {
@@ -279,18 +374,10 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
           }
           
           // For author/comment notifications on PRs, fetch activity since last_read_at
-          const needsActivityCheck = 
-            (notification.reason === 'author' || notification.reason === 'comment') && 
-            notification.type === 'PullRequest';
-          
-          console.log(`[GH Notif] "${notification.title}" - needsActivityCheck: ${needsActivityCheck}, reason: ${notification.reason}, type: ${notification.type}`);
-          
-          if (needsActivityCheck) {
-            // Skip merged/closed PRs entirely - not interested in these
+          if (needsActivityCheck(notification)) {
+            // Track if PR is merged/closed - we'll filter later based on activity
             if (details.merged || details.state === 'closed') {
-              console.log(`[GH Notif] "${notification.title}" - SKIPPED: merged=${details.merged}, state=${details.state}`);
               notification.isClosedOrMerged = true;
-              return;
             }
             
             const prNumber = notification.url.match(/\/pulls\/(\d+)$/)?.[1];
@@ -298,150 +385,31 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
             const sinceDate = notification.lastReadAt;
             
             if (prNumber) {
-              try {
-                // Fetch issue comments (general PR comments)
-                const commentsUrl = `${repoUrl}/issues/${prNumber}/comments?per_page=50`;
-                const comments = await fetchWithAuth(commentsUrl, token);
-                const newComments = sinceDate 
-                  ? comments.filter(c => new Date(c.created_at) > sinceDate && c.user?.login !== currentUser)
-                  : comments.filter(c => c.user?.login !== currentUser).slice(-5);
-                
-                for (const comment of newComments) {
-                  notification.newActivities.push({
-                    type: 'comment',
-                    author: comment.user?.login,
-                    createdAt: new Date(comment.created_at)
-                  });
-                }
-              } catch (err) {
-                console.error(`[GH Notif] "${notification.title}" - Comments fetch FAILED:`, err);
-              }
+              // Fetch all activity types in parallel
+              const [comments, reviewComments, reviews] = await Promise.all([
+                fetchNewIssueComments(repoUrl, prNumber, sinceDate, currentUser, token),
+                fetchNewReviewComments(repoUrl, prNumber, sinceDate, currentUser, token),
+                fetchNewReviews(repoUrl, prNumber, sinceDate, currentUser, token)
+              ]);
               
-              try {
-                // Fetch review comments (inline code comments)
-                const reviewCommentsUrl = `${repoUrl}/pulls/${prNumber}/comments?per_page=50`;
-                const reviewComments = await fetchWithAuth(reviewCommentsUrl, token);
-                const newReviewComments = sinceDate
-                  ? reviewComments.filter(c => new Date(c.created_at) > sinceDate && c.user?.login !== currentUser)
-                  : reviewComments.filter(c => c.user?.login !== currentUser).slice(-5);
-                
-                for (const comment of newReviewComments) {
-                  notification.newActivities.push({
-                    type: 'review_comment',
-                    author: comment.user?.login,
-                    createdAt: new Date(comment.created_at)
-                  });
-                }
-              } catch (err) {
-                console.error(`[GH Notif] "${notification.title}" - Review comments fetch FAILED:`, err);
-              }
+              notification.newActivities = [...comments, ...reviewComments, ...reviews];
               
-              try {
-                // Fetch reviews (approvals, changes requested, etc.)
-                const reviewsUrl = `${repoUrl}/pulls/${prNumber}/reviews?per_page=50`;
-                const reviews = await fetchWithAuth(reviewsUrl, token);
-                console.log(`[GH Notif] "${notification.title}" - All reviews:`, reviews.map(r => ({
-                  author: r.user?.login,
-                  state: r.state,
-                  submitted_at: r.submitted_at
-                })));
-                console.log(`[GH Notif] "${notification.title}" - sinceDate: ${sinceDate}, currentUser: ${currentUser}`);
-                
-                const newReviews = sinceDate
-                  ? reviews.filter(r => new Date(r.submitted_at) > sinceDate && r.user?.login !== currentUser)
-                  : reviews.filter(r => r.user?.login !== currentUser).slice(-5);
-                
-                console.log(`[GH Notif] "${notification.title}" - Filtered reviews (new since lastRead):`, newReviews.map(r => ({
-                  author: r.user?.login,
-                  state: r.state,
-                  submitted_at: r.submitted_at
-                })));
-                
-                for (const review of newReviews) {
-                  const state = review.state?.toLowerCase();
-                  let reviewType = 'reviewed';
-                  if (state === 'approved') reviewType = 'approved';
-                  else if (state === 'changes_requested') reviewType = 'changes_requested';
-                  else if (state === 'commented') {
-                    reviewType = 'reviewed';
-                  }
-                  
-                  notification.newActivities.push({
-                    type: reviewType,
-                    author: review.user?.login,
-                    createdAt: new Date(review.submitted_at)
-                  });
-                }
-              } catch (err) {
-                console.error(`[GH Notif] "${notification.title}" - Reviews fetch FAILED:`, err);
-              }
-            }
-            
-            // Sort activities by date (newest first) and set summary
-            notification.newActivities.sort((a, b) => b.createdAt - a.createdAt);
-            
-            if (notification.newActivities.length > 0) {
-              // Get unique authors
-              const authors = [...new Set(notification.newActivities.map(a => a.author).filter(Boolean))];
-              notification.activityAuthor = authors.slice(0, 2).join(', ') + (authors.length > 2 ? ` +${authors.length - 2}` : '');
+              // Sort activities by date (newest first)
+              notification.newActivities.sort((a, b) => b.createdAt - a.createdAt);
               
-              // Build summary of activity types
-              const typeCounts = {};
-              for (const activity of notification.newActivities) {
-                typeCounts[activity.type] = (typeCounts[activity.type] || 0) + 1;
-              }
-              
-              // Prioritize showing the most important activity type
-              if (typeCounts.approved) {
-                notification.specificReason = typeCounts.approved > 1 ? `${typeCounts.approved} approvals` : 'approved';
-              } else if (typeCounts.changes_requested) {
-                notification.specificReason = 'changes_requested';
-              } else if (typeCounts.reviewed) {
-                notification.specificReason = typeCounts.reviewed > 1 ? `${typeCounts.reviewed} reviews` : 'reviewed';
-              } else {
-                // Count comments
-                const commentCount = (typeCounts.comment || 0) + (typeCounts.review_comment || 0);
-                if (commentCount > 0) {
-                  notification.specificReason = commentCount > 1 ? `${commentCount} comments` : 'commented';
-                }
-              }
+              // Build summary
+              buildActivitySummary(notification);
             }
           }
         } catch (err) {
-          notification.detailsLoaded = true;
+          // Silently continue on error - notification will show without details
         }
       }));
-      
     }
     
-    // Final filtered list - render once after all details loaded
-    console.log('[GH Notif] Before final filter:', detailedNotifications.map(n => ({
-      title: n.title,
-      reason: n.reason,
-      isTeamReview: n.isTeamReview,
-      isClosedOrMerged: n.isClosedOrMerged,
-      newActivitiesCount: n.newActivities.length,
-      newActivities: n.newActivities
-    })));
-    
+    // Final filtered list
     const finalFiltered = detailedNotifications
-      .filter(n => {
-        if (n.isTeamReview) {
-          console.log(`[GH Notif] "${n.title}" - FILTERED OUT: team review`);
-          return false;
-        }
-        if (n.isClosedOrMerged) {
-          console.log(`[GH Notif] "${n.title}" - FILTERED OUT: closed/merged`);
-          return false;
-        }
-        // For author/comment notifications, only show if there's new activity
-        if ((n.reason === 'author' || n.reason === 'comment') && n.newActivities.length === 0) {
-          console.log(`[GH Notif] "${n.title}" - FILTERED OUT: no new activities (reason: ${n.reason})`);
-          return false;
-        }
-        console.log(`[GH Notif] "${n.title}" - KEPT`);
-        return true;
-      })
+      .filter(filterNotificationByRules)
       .sort((a, b) => b.updatedAt - a.updatedAt);
     
     // Render final results
@@ -470,7 +438,7 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
     chrome.action.setBadgeBackgroundColor({ color: '#a371f7' });
     
   } catch (err) {
-    console.error('[GH Notif] ERROR in loadNotifications:', err);
+    console.error('Failed to load notifications:', err);
     if (!isBackground) {
       if (err.message.includes('401')) {
         showError('Invalid token. Please check your GitHub token in settings.');
@@ -481,11 +449,14 @@ async function loadNotifications(token, isBackground = false, keepExisting = fal
   }
 }
 
+// Track pending removals to prevent race conditions
+const pendingRemovals = new Set();
+
 function renderNotifications(notifications) {
   emptyEl.classList.add('hidden');
   listEl.innerHTML = notifications.map(n => {
     const displayReason = n.specificReason || n.reason;
-    const reasonClass = getReasonClass(displayReason, n.isDirect && n.reason === 'review_requested');
+    const reasonClass = getReasonClass(displayReason, n.reason === 'review_requested' && !n.isTeamReview);
     const actorDisplay = n.activityAuthor || n.author;
     
     return `
@@ -531,6 +502,12 @@ function renderNotifications(notifications) {
       const item = btn.closest('.notification-item');
       const threadId = item.dataset.id;
       
+      // Prevent duplicate removals
+      if (pendingRemovals.has(threadId)) {
+        return;
+      }
+      pendingRemovals.add(threadId);
+      
       // Add loading state
       btn.classList.add('loading');
       btn.disabled = true;
@@ -544,16 +521,18 @@ function renderNotifications(notifications) {
         item.style.opacity = '0';
         setTimeout(() => {
           item.remove();
+          pendingRemovals.delete(threadId);
           // Update cache
           updateCacheAfterDone(threadId);
           // Check if list is empty
           if (listEl.children.length === 0) {
             showEmpty();
           }
-        }, 200);
+        }, NOTIFICATION_REMOVAL_ANIMATION_MS);
       } else {
         btn.classList.remove('loading');
         btn.disabled = false;
+        pendingRemovals.delete(threadId);
       }
     });
   });
@@ -610,9 +589,9 @@ function formatReason(reason) {
   return reasons[reason] || reason;
 }
 
-function getReasonClass(reason, isDirect) {
+function getReasonClass(reason, isDirectReview) {
   // Return CSS class for styling specific reasons
-  if (isDirect) return 'direct';
+  if (isDirectReview) return 'direct';
   if (reason === 'approved' || reason?.includes('approval')) return 'approved';
   if (reason === 'changes_requested') return 'changes-requested';
   if (reason === 'reviewed' || reason === 'review_comment' || reason?.includes('review')) return 'reviewed';
@@ -641,4 +620,3 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
-

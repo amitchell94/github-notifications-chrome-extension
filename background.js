@@ -7,6 +7,9 @@ chrome.runtime.onInstalled.addListener(() => {
     periodInMinutes: CHECK_INTERVAL_MINUTES
   });
   
+  // Set badge color once
+  chrome.action.setBadgeBackgroundColor({ color: '#a371f7' });
+  
   // Check immediately on install
   checkNotifications();
 });
@@ -23,22 +26,24 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+function updateBadge(count) {
+  chrome.action.setBadgeText({ text: count ? String(count) : '' });
+}
+
 async function checkNotifications() {
   try {
     const { githubToken, cachedNotifications } = await chrome.storage.local.get(['githubToken', 'cachedNotifications']);
     
     if (!githubToken) {
-      chrome.action.setBadgeText({ text: '' });
+      updateBadge(0);
       return;
     }
     
     // Update badge from cached count (popup does the real filtering)
     const count = cachedNotifications?.length || 0;
-    chrome.action.setBadgeText({ text: count > 0 ? String(count) : '' });
-    chrome.action.setBadgeBackgroundColor({ color: '#a371f7' });
+    updateBadge(count);
     
   } catch (err) {
     console.error('Error checking notifications:', err);
   }
 }
-
