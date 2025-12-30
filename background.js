@@ -62,11 +62,12 @@ function updateBadge(count) {
 
 async function checkNotifications() {
   try {
-    const { githubToken, lastSeenIds, pollIntervalMinutes, currentUser } = await chrome.storage.local.get([
+    const { githubToken, lastSeenIds, pollIntervalMinutes, currentUser, autoMarkTeamReviews } = await chrome.storage.local.get([
       'githubToken', 
       'lastSeenIds',
       'pollIntervalMinutes',
-      'currentUser'
+      'currentUser',
+      'autoMarkTeamReviews'
     ]);
     
     if (!githubToken) {
@@ -83,7 +84,7 @@ async function checkNotifications() {
     }
     
     // Fetch fresh notifications from GitHub API
-    const result = await loadNotifications(githubToken, currentUser);
+    const result = await loadNotifications(githubToken, currentUser, { autoMarkTeamReviews });
     const notifications = result.notifications;
     
     // Store current user if not already stored

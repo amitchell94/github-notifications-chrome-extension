@@ -11,8 +11,10 @@ const errorEl = document.getElementById('error');
 const emptyEl = document.getElementById('empty');
 const listEl = document.getElementById('notifications-list');
 const tokenInput = document.getElementById('token-input');
+const autoMarkTeamReviewsCheckbox = document.getElementById('auto-mark-team-reviews');
 const saveTokenBtn = document.getElementById('save-token-btn');
 const settingsBtn = document.getElementById('settings-btn');
+const closeSettingsBtn = document.getElementById('close-settings-btn');
 const refreshBtn = document.getElementById('refresh-btn');
 
 // Initialize
@@ -55,16 +57,28 @@ saveTokenBtn.addEventListener('click', async () => {
   const token = tokenInput.value.trim();
   if (!token) return;
   
+  const autoMarkTeamReviews = autoMarkTeamReviewsCheckbox.checked;
+  
   // Clear cache when token changes
-  await chrome.storage.local.set({ githubToken: token, cachedNotifications: null, cachedAt: null });
+  await chrome.storage.local.set({ 
+    githubToken: token, 
+    autoMarkTeamReviews,
+    cachedNotifications: null, 
+    cachedAt: null 
+  });
   showNotificationsView();
   loadNotificationsUI(token, false);
 });
 
 settingsBtn.addEventListener('click', async () => {
-  const { githubToken } = await chrome.storage.local.get('githubToken');
+  const { githubToken, autoMarkTeamReviews } = await chrome.storage.local.get(['githubToken', 'autoMarkTeamReviews']);
   tokenInput.value = githubToken || '';
+  autoMarkTeamReviewsCheckbox.checked = autoMarkTeamReviews !== false; // Default to true
   showSettingsView();
+});
+
+closeSettingsBtn.addEventListener('click', () => {
+  showNotificationsView();
 });
 
 refreshBtn.addEventListener('click', async () => {
@@ -129,11 +143,11 @@ async function loadNotificationsUI(token, isBackground = false, keepExisting = f
   }
   
   try {
-    // Get current user from storage
-    const { currentUser: storedUser } = await chrome.storage.local.get('currentUser');
+    // Get current user and settings from storage
+    const { currentUser: storedUser, autoMarkTeamReviews } = await chrome.storage.local.get(['currentUser', 'autoMarkTeamReviews']);
     
     // Use shared module to load notifications (loadNotifications is globally available from shared.js)
-    const result = await loadNotifications(token, storedUser);
+    const result = await loadNotifications(token, storedUser, { autoMarkTeamReviews });
     const notifications = result.notifications;
     
     // Store current user if not already stored

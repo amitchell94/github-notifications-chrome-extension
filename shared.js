@@ -163,8 +163,10 @@ function buildActivitySummary(notification) {
   }
 }
 
-function filterNotificationByRules(notification) {
-  if (notification.isTeamReview) {
+function filterNotificationByRules(notification, settings = {}) {
+  // Only filter out team reviews if auto-mark is enabled (they'll be marked as done)
+  // If auto-mark is disabled, show team reviews in the list
+  if (notification.isTeamReview && settings.autoMarkTeamReviews !== false) {
     return false;
   }
   // For merged/closed PRs, only show if there's new activity
@@ -178,7 +180,7 @@ function filterNotificationByRules(notification) {
   return true;
 }
 
-async function loadNotifications(token, currentUser = null) {
+async function loadNotifications(token, currentUser = null, settings = {}) {
   try {
     // Get current user first if not provided
     if (!currentUser) {
@@ -250,8 +252,10 @@ async function loadNotifications(token, currentUser = null) {
             const requestedReviewers = (details.requested_reviewers || []).map(r => r.login);
             if (!requestedReviewers.includes(currentUser)) {
               notification.isTeamReview = true;
-              // Auto-mark team review requests as done
-              markNotificationAsDone(notification.id, token).catch(() => {});
+              // Auto-mark team review requests as done only if setting is enabled (default: true)
+              if (settings.autoMarkTeamReviews !== false) {
+                markNotificationAsDone(notification.id, token).catch(() => {});
+              }
             }
           }
           
@@ -291,7 +295,7 @@ async function loadNotifications(token, currentUser = null) {
     
     // Final filtered list
     const finalFiltered = detailedNotifications
-      .filter(filterNotificationByRules)
+      .filter(n => filterNotificationByRules(n, settings))
       .sort((a, b) => b.updatedAt - a.updatedAt);
     
     // Cache final results
