@@ -3,7 +3,7 @@
   "name": "GitHub Notifications",
   "version": "1.0",
   "description": "View your GitHub notifications at a glance",
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "notifications"],
   "host_permissions": ["https://api.github.com/*"],
   "action": {
     "default_popup": "popup.html",
