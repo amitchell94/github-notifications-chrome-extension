@@ -1,6 +1,6 @@
 # GitHub Notifications Chrome Extension
 
-A lightweight Chrome extension for viewing and managing your GitHub notifications at a glance, with smart filtering and macOS system notifications.
+A lightweight Chrome extension for viewing and managing your GitHub notifications at a glance, with smart filtering and Chrome desktop notifications.
 
 ## Features
 
@@ -48,13 +48,15 @@ Only shows notifications you care about:
    - Click the extension icon in your Chrome toolbar
    - Click **Settings** at the bottom
    - Paste your GitHub token
-   - Click **Save Token**
+   - Configure optional settings:
+     - **Auto-mark team review requests as done** (enabled by default)
+     - **Enable Chrome notifications** (enabled by default)
+   - Click **Save Settings**
 
-3. **Enable macOS Notifications** (optional but recommended):
-   - Open **System Settings** → **Notifications**
-   - Find **Google Chrome** in the list
-   - Enable **Allow notifications**
-   - Set banner style to **Temporary** or **Persistent**
+3. **Enable System Notifications** (optional but recommended):
+   - **macOS**: Open **System Settings** → **Notifications** → **Google Chrome** → Enable notifications
+   - **Windows**: Open **Settings** → **System** → **Notifications** → **Google Chrome** → Enable notifications
+   - **Linux**: Notifications are typically enabled by default
 
 ## Settings
 
@@ -68,7 +70,17 @@ By default, the extension automatically marks team review requests as "done" to 
 3. Toggle **Auto-mark team review requests as done**
    - **Enabled** (default): Team reviews are automatically archived and won't appear in your notification list
    - **Disabled**: Team reviews will appear in your notification list and can be manually marked as done
-4. Click **Save Token** to save your preference
+4. Click **Save Settings** to save your preference
+
+### Chrome Notifications
+
+By default, the extension sends Chrome desktop notifications when new GitHub notifications arrive (limited to 3 at a time to avoid spam).
+
+**To disable notifications:**
+1. Click the extension icon
+2. Click **Settings** at the bottom
+3. Toggle **Enable Chrome notifications** off
+4. Click **Save Settings** to save your preference
 
 ## Usage
 
@@ -114,7 +126,7 @@ The extension automatically filters out noise:
 The extension checks for new notifications every 2 minutes by default, or uses GitHub's recommended polling interval if provided. When new notifications arrive:
 
 - The badge count updates automatically
-- macOS system notifications appear (up to 3 at a time to avoid spam)
+- Chrome desktop notifications appear (up to 3 at a time to avoid spam)
 - Notifications are cached for quick viewing
 
 ## Development
