@@ -12,6 +12,7 @@ const emptyEl = document.getElementById('empty');
 const listEl = document.getElementById('notifications-list');
 const tokenInput = document.getElementById('token-input');
 const autoMarkTeamReviewsCheckbox = document.getElementById('auto-mark-team-reviews');
+const enableSystemNotificationsCheckbox = document.getElementById('enable-system-notifications');
 const saveTokenBtn = document.getElementById('save-token-btn');
 const settingsBtn = document.getElementById('settings-btn');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
@@ -58,11 +59,13 @@ saveTokenBtn.addEventListener('click', async () => {
   if (!token) return;
   
   const autoMarkTeamReviews = autoMarkTeamReviewsCheckbox.checked;
+  const enableSystemNotifications = enableSystemNotificationsCheckbox.checked;
   
   // Clear cache when token changes
   await chrome.storage.local.set({ 
     githubToken: token, 
     autoMarkTeamReviews,
+    enableSystemNotifications,
     cachedNotifications: null, 
     cachedAt: null 
   });
@@ -71,9 +74,10 @@ saveTokenBtn.addEventListener('click', async () => {
 });
 
 settingsBtn.addEventListener('click', async () => {
-  const { githubToken, autoMarkTeamReviews } = await chrome.storage.local.get(['githubToken', 'autoMarkTeamReviews']);
+  const { githubToken, autoMarkTeamReviews, enableSystemNotifications } = await chrome.storage.local.get(['githubToken', 'autoMarkTeamReviews', 'enableSystemNotifications']);
   tokenInput.value = githubToken || '';
   autoMarkTeamReviewsCheckbox.checked = autoMarkTeamReviews !== false; // Default to true
+  enableSystemNotificationsCheckbox.checked = enableSystemNotifications !== false; // Default to true
   showSettingsView();
 });
 
@@ -177,8 +181,13 @@ async function loadNotificationsUI(token, isBackground = false, keepExisting = f
   } catch (err) {
     console.error('Failed to load notifications:', err);
     if (!isBackground) {
-      if (err.message.includes('401')) {
+      // Show user-friendly error messages
+      if (err.message.includes('Authentication failed') || err.message.includes('401')) {
         showError('Invalid token. Please check your GitHub token in settings.');
+      } else if (err.message.includes('Network error') || err.message.includes('Failed to fetch')) {
+        showError('Unable to connect to GitHub. Please check your internet connection.');
+      } else if (err.message.includes('Access forbidden') || err.message.includes('403')) {
+        showError('Token lacks required permissions. Please create a new token with "notifications" scope.');
       } else {
         showError(`Failed to load notifications: ${err.message}`);
       }

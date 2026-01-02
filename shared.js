@@ -11,30 +11,48 @@ const MAX_COMMENTS_PER_FETCH = 50;
 
 // API calls
 async function fetchWithAuth(url, token) {
-  const response = await fetch(url, {
-    headers: {
-      ...HEADERS,
-      'Authorization': `Bearer ${token}`
-    },
-    cache: 'no-store'
-  });
-  
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-  
-  // Check for X-Poll-Interval header (GitHub's recommended polling interval in seconds)
-  const pollInterval = response.headers.get('X-Poll-Interval');
-  if (pollInterval) {
-    const intervalSeconds = parseInt(pollInterval, 10);
-    if (!isNaN(intervalSeconds) && intervalSeconds > 0) {
-      // Store the poll interval (convert seconds to minutes, minimum 1 minute)
-      const intervalMinutes = Math.max(1, Math.ceil(intervalSeconds / 60));
-      await chrome.storage.local.set({ pollIntervalMinutes: intervalMinutes });
+  try {
+    const response = await fetch(url, {
+      headers: {
+        ...HEADERS,
+        'Authorization': `Bearer ${token}`
+      },
+      cache: 'no-store'
+    });
+    
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('Authentication failed. Please check your GitHub token in settings.');
+      } else if (response.status === 403) {
+        throw new Error('Access forbidden. Your token may not have the required permissions.');
+      } else if (response.status === 404) {
+        throw new Error('Resource not found. The API endpoint may have changed.');
+      } else {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
     }
+    
+    // Check for X-Poll-Interval header (GitHub's recommended polling interval in seconds)
+    const pollInterval = response.headers.get('X-Poll-Interval');
+    if (pollInterval) {
+      const intervalSeconds = parseInt(pollInterval, 10);
+      if (!isNaN(intervalSeconds) && intervalSeconds > 0) {
+        // Store the poll interval (convert seconds to minutes, minimum 1 minute)
+        const intervalMinutes = Math.max(1, Math.ceil(intervalSeconds / 60));
+        await chrome.storage.local.set({ pollIntervalMinutes: intervalMinutes });
+      }
+    }
+    
+    return response.json();
+  } catch (err) {
+    // Network errors (no response from server)
+    if (err instanceof TypeError) {
+      console.error('Network/TypeError detected:', err.message);
+      throw new Error('Network error: Unable to reach GitHub API. Check your internet connection.');
+    }
+    // Re-throw other errors (including our custom error messages)
+    throw err;
   }
-  
-  return response.json();
 }
 
 async function markNotificationAsRead(threadId, token) {
@@ -181,11 +199,13 @@ function filterNotificationByRules(notification, settings = {}) {
 }
 
 async function loadNotifications(token, currentUser = null, settings = {}) {
+  let resolvedUser = currentUser;
+  
   try {
     // Get current user first if not provided
-    if (!currentUser) {
+    if (!resolvedUser) {
       const user = await fetchWithAuth(`${API_BASE}/user`, token);
-      currentUser = user.login;
+      resolvedUser = user.login;
     }
     
     // Get notifications
@@ -198,7 +218,7 @@ async function loadNotifications(token, currentUser = null, settings = {}) {
       await chrome.storage.local.set({ cachedNotifications: [], cachedAt: Date.now() });
       return {
         notifications: [],
-        currentUser
+        currentUser: resolvedUser
       };
     }
     
@@ -250,7 +270,7 @@ async function loadNotifications(token, currentUser = null, settings = {}) {
           // Check if it's a team review request
           if (notification.reason === 'review_requested' && notification.type === 'PullRequest') {
             const requestedReviewers = (details.requested_reviewers || []).map(r => r.login);
-            if (!requestedReviewers.includes(currentUser)) {
+            if (!requestedReviewers.includes(resolvedUser)) {
               notification.isTeamReview = true;
               // Auto-mark team review requests as done only if setting is enabled (default: true)
               if (settings.autoMarkTeamReviews !== false) {
@@ -273,9 +293,9 @@ async function loadNotifications(token, currentUser = null, settings = {}) {
             if (prNumber) {
               // Fetch all activity types in parallel
               const [comments, reviewComments, reviews] = await Promise.all([
-                fetchNewIssueComments(repoUrl, prNumber, sinceDate, currentUser, token),
-                fetchNewReviewComments(repoUrl, prNumber, sinceDate, currentUser, token),
-                fetchNewReviews(repoUrl, prNumber, sinceDate, currentUser, token)
+                fetchNewIssueComments(repoUrl, prNumber, sinceDate, resolvedUser, token),
+                fetchNewReviewComments(repoUrl, prNumber, sinceDate, resolvedUser, token),
+                fetchNewReviews(repoUrl, prNumber, sinceDate, resolvedUser, token)
               ]);
               
               notification.newActivities = [...comments, ...reviewComments, ...reviews];
@@ -312,11 +332,14 @@ async function loadNotifications(token, currentUser = null, settings = {}) {
     
     return {
       notifications: finalFiltered,
-      currentUser
+      currentUser: resolvedUser
     };
     
   } catch (err) {
     console.error('Failed to load notifications:', err);
+    console.error('Error name:', err.name);
+    console.error('Error message:', err.message);
+    console.error('Error stack:', err.stack);
     throw err;
   }
 }

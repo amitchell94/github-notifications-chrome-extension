@@ -62,12 +62,13 @@ function updateBadge(count) {
 
 async function checkNotifications() {
   try {
-    const { githubToken, lastSeenIds, pollIntervalMinutes, currentUser, autoMarkTeamReviews } = await chrome.storage.local.get([
+    const { githubToken, lastSeenIds, pollIntervalMinutes, currentUser, autoMarkTeamReviews, enableSystemNotifications } = await chrome.storage.local.get([
       'githubToken', 
       'lastSeenIds',
       'pollIntervalMinutes',
       'currentUser',
-      'autoMarkTeamReviews'
+      'autoMarkTeamReviews',
+      'enableSystemNotifications'
     ]);
     
     if (!githubToken) {
@@ -95,7 +96,7 @@ async function checkNotifications() {
     // Update badge with actual count
     updateBadge(notifications.length);
     
-    // Detect new notifications and send system notifications
+    // Detect new notifications and send system notifications (if enabled)
     if (notifications && notifications.length > 0) {
       const currentIds = notifications.map(n => n.id);
       const previousIds = lastSeenIds || [];
@@ -103,8 +104,8 @@ async function checkNotifications() {
       // Find notifications that are new since last check
       const newNotifications = notifications.filter(n => !previousIds.includes(n.id));
       
-      // Only send notifications if we have a previous state (not on first load)
-      if (previousIds.length > 0 && newNotifications.length > 0) {
+      // Only send notifications if we have a previous state (not on first load) and setting is enabled
+      if (previousIds.length > 0 && newNotifications.length > 0 && enableSystemNotifications !== false) {
         // Send system notifications for new items (limit to 3 to avoid spam)
         const toNotify = newNotifications.slice(0, 3);
         for (const notification of toNotify) {
